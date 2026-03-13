@@ -1,2 +1,2 @@
-vdf>=3.4
-requests>=2.31
+vdf==3.4
+requests==2.32.5

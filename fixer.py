@@ -186,8 +186,12 @@ def fix_shortcuts_interactively(shortcuts_map: dict[str, dict], logger) -> FixRe
         for issue in current_issues:
             print(f"  - {issue}")
 
-        default = "s" if any("does not exist on disk" in issue for issue in current_issues) else "f"
-        action = _prompt_action("Action [f=fix, r=remove, s=skip]: ", {"f", "r", "s"}, default)
+        has_unfixable_wildcard = any("cannot be safely fixed automatically" in issue for issue in current_issues)
+        if has_unfixable_wildcard:
+            action = _prompt_action("Action [r=remove, s=skip]: ", {"r", "s"}, "s")
+        else:
+            default = "s" if any("does not exist on disk" in issue for issue in current_issues) else "f"
+            action = _prompt_action("Action [f=fix, r=remove, s=skip]: ", {"f", "r", "s"}, default)
         if action == "s":
             logger.info("Skipped shortcut index %s", index)
             result.skipped_count += 1

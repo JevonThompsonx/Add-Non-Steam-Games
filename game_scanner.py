@@ -20,7 +20,7 @@ from config import (
     SYSTEM_ROOT_SKIP_DIRS,
     TARGET_DRIVES,
 )
-from shortcut_builder import clean_game_name, normalized_exe_identity, prettify_exe_stem, similarity_score
+from shortcut_builder import clean_game_name, normalize_lookup_text, normalized_exe_identity, prettify_exe_stem, similarity_score
 from steam_paths import path_is_in_steam_library
 
 
@@ -201,6 +201,7 @@ def discover_games(
     existing_exe_paths: set[str],
     steam_common_dirs: list[Path],
     logger,
+    existing_app_names: set[str] | None = None,
 ) -> list[DiscoveredGame]:
     candidate_dirs: list[Path] = []
     seen_dirs: set[str] = set()
@@ -225,6 +226,7 @@ def discover_games(
 
     discovered: list[DiscoveredGame] = []
     seen_exes = set(existing_exe_paths)
+    seen_app_names = set(existing_app_names or set())
 
     for game_dir in sorted(candidate_dirs, key=lambda path: str(path).lower()):
         best_exe, ambiguous, candidates, score = _select_best_executable(game_dir, steam_common_dirs)
@@ -236,6 +238,9 @@ def discover_games(
             continue
 
         app_name = _derive_display_name(game_dir, best_exe)
+        normalized_app_name = normalize_lookup_text(app_name)
+        if normalized_app_name in seen_app_names:
+            continue
         if not _is_valid_candidate(game_dir, best_exe, app_name, score):
             continue
         discovered.append(
@@ -249,6 +254,7 @@ def discover_games(
             )
         )
         seen_exes.add(exe_identity)
+        seen_app_names.add(normalized_app_name)
         logger.info("Discovered candidate game '%s' at %s", app_name, best_exe)
 
     return sorted(discovered, key=lambda item: item.app_name.lower())

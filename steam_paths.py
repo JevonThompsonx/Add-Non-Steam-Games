@@ -73,7 +73,6 @@ def list_steam_users(steam_path: Path) -> list[SteamUser]:
         if not entry.is_dir() or not entry.name.isdigit():
             continue
         config_dir = entry / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
         stat_source = config_dir if config_dir.exists() else entry
         users.append(
             SteamUser(
@@ -90,12 +89,15 @@ def list_steam_users(steam_path: Path) -> list[SteamUser]:
 
 
 def is_steam_running() -> bool:
-    result = subprocess.run(
-        ["tasklist", "/FI", "IMAGENAME eq steam.exe"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq steam.exe"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
     return "steam.exe" in result.stdout.lower()
 
 

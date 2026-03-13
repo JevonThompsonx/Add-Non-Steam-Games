@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
+import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -11,11 +11,18 @@ from config import (
     ARTWORK_MAX_RETRIES,
     ARTWORK_REQUEST_DELAY_SECONDS,
     ARTWORK_REQUESTS,
-    ENV_FILE_NAMES,
+    get_env_value,
 )
 from shortcut_builder import build_search_aliases, get_shortcut_exe_value, get_unsigned_id, normalize_lookup_text, normalize_windows_path, similarity_score
 
 API_BASE_URL = "https://www.steamgriddb.com/api/v2"
+ARTWORK_DOWNLOAD_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.steamgriddb.com/",
+}
 
 
 @dataclass(slots=True)
@@ -23,20 +30,7 @@ class ArtworkResult:
     downloaded: int = 0
     skipped: int = 0
     failures: int = 0
-
-
-def _parse_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+    downloaded_files: list[Path] = field(default_factory=list)
 
 
 def _mask_api_key(value: str) -> str:
@@ -46,17 +40,9 @@ def _mask_api_key(value: str) -> str:
 
 
 def resolve_api_key(prompt_if_missing: bool = True) -> str | None:
-    for name in API_KEY_ENV_NAMES:
-        value = os.environ.get(name)
-        if value:
-            return value.strip()
-
-    for env_file_name in ENV_FILE_NAMES:
-        values = _parse_env_file(Path.cwd() / env_file_name)
-        for name in API_KEY_ENV_NAMES:
-            value = values.get(name)
-            if value:
-                return value.strip()
+    value = get_env_value(*API_KEY_ENV_NAMES)
+    if value:
+        return value.strip()
 
     if not prompt_if_missing:
         return None
@@ -79,7 +65,7 @@ class SteamGridDBClient:
     def validate_api_key(self) -> None:
         payload = self._request_json("/search/autocomplete/test")
         if payload is None:
-            self.logger.warning("SteamGridDB key validation returned no data; continuing anyway")
+            raise RuntimeError("SteamGridDB API validation failed. Check connectivity and confirm the API key is valid.")
 
     def _authorized_get(self, url: str, timeout: int):
         response = self.session.get(url, timeout=timeout)
@@ -89,9 +75,24 @@ class SteamGridDBClient:
         response = self.session.get(
             url,
             timeout=timeout,
-            headers={"Authorization": f"Bearer {self.api_key}", "User-Agent": "steam-game-manager/1.0"},
+            headers=ARTWORK_DOWNLOAD_HEADERS,
         )
-        return response
+        if response.status_code != 401:
+            return response
+
+        response = self.session.get(
+            url,
+            timeout=timeout,
+            headers={**ARTWORK_DOWNLOAD_HEADERS, "Authorization": f"Bearer {self.api_key}"},
+        )
+        if response.status_code != 401:
+            return response
+
+        return self._requests.get(
+            url,
+            timeout=timeout,
+            headers=ARTWORK_DOWNLOAD_HEADERS,
+        )
 
     def _throttle(self) -> None:
         now = time.monotonic()
@@ -221,7 +222,10 @@ class SteamGridDBClient:
             except self._requests.HTTPError as error:
                 self.logger.error("Artwork download failed for %s: %s", url, error)
                 return False
-            destination.write_bytes(response.content)
+            with tempfile.NamedTemporaryFile(delete=False, dir=destination.parent, suffix=".tmp") as handle:
+                handle.write(response.content)
+                temp_path = Path(handle.name)
+            temp_path.replace(destination)
             return True
         return False
 
@@ -295,6 +299,7 @@ def download_artwork_for_shortcut(shortcut: dict, grid_dir: Path, client: SteamG
 
         if client.download_to_file(str(art["url"]), destination):
             result.downloaded += 1
+            result.downloaded_files.append(destination)
             logger.info("Downloaded %s artwork for %s to %s", art_type, app_name, destination)
             if art_type == "icon":
                 shortcut["icon"] = normalize_windows_path(str(destination))
@@ -317,4 +322,14 @@ def download_artwork_for_shortcuts(shortcuts: dict[str, dict], grid_dir: Path, a
         total.downloaded += result.downloaded
         total.skipped += result.skipped
         total.failures += result.failures
+        total.downloaded_files.extend(result.downloaded_files)
     return total
+
+
+def cleanup_downloaded_artwork(paths: list[Path], logger) -> None:
+    for path in paths:
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as error:
+            logger.warning("Failed to remove staged artwork %s: %s", path, error)

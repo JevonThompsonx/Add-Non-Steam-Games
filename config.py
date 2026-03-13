@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import os
 import re
 from pathlib import Path
 
-def _load_local_env() -> dict[str, str]:
+
+@lru_cache(maxsize=1)
+def load_local_env() -> dict[str, str]:
     env_path = Path(__file__).resolve().with_name(".env")
     if not env_path.exists():
         return {}
@@ -19,8 +22,8 @@ def _load_local_env() -> dict[str, str]:
     return values
 
 
-def _get_env_value(*names: str) -> str | None:
-    local_env = _load_local_env()
+def get_env_value(*names: str) -> str | None:
+    local_env = load_local_env()
     for name in names:
         value = os.environ.get(name)
         if value:
@@ -63,10 +66,8 @@ DEFAULT_STEAM_PATHS = [
     Path(r"C:\Program Files\Steam"),
 ]
 
-TARGET_DRIVES = _parse_scan_drives(_get_env_value("SCAN_DRIVES", "GAME_SCAN_DRIVES")) or [
+TARGET_DRIVES = _parse_scan_drives(get_env_value("SCAN_DRIVES", "GAME_SCAN_DRIVES")) or [
     Path("C:/"),
-    Path("F:/"),
-    Path("G:/"),
 ]
 
 KNOWN_GAME_DIRS = [
